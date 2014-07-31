@@ -92,6 +92,13 @@ func Work() error {
 	}
 	jobs := poller.poll(time.Duration(interval), quit)
 
+	if jobs == nil {
+		// If the poller never made a connection and a quit signal was received
+		// in the mean time, then jobs will be nil, which means we should bail
+		// out instead of spinning up workers
+		return nil
+	}
+
 	var monitor sync.WaitGroup
 
 	for id := 0; id < concurrency; id++ {

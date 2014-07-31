@@ -142,9 +142,11 @@ func (w *worker) run(job *job, workerFunc workerFunc) {
 	conn, err := GetConn()
 	if err != nil {
 		logger.Criticalf("Error on getting connection in worker %v", w)
-	} else {
-		w.start(conn, job)
-		PutConn(conn)
+		return
 	}
+
+	w.start(conn, job)
+	PutConn(conn)
+
 	err = workerFunc(job.Queue, job.Payload.Args...)
 }
