@@ -101,13 +101,24 @@ func Work() error {
 	if err != nil {
 		return err
 	}
-	jobs := poller.poll(time.Duration(interval), quit)
 
-	if jobs == nil {
-		// If the poller never made a connection and a quit signal was received
-		// in the mean time, then jobs will be nil, which means we should bail
-		// out instead of spinning up workers
-		return nil
+	pollInterval := time.Duration(interval)
+	var jobs <-chan *job
+	for {
+		var err error
+		jobs, err = poller.beginPolling(pollInterval, quit)
+		if err == nil {
+			logger.Infof("Poller initialized %s", poller)
+			break
+		}
+
+		// Sleep for a bit or wait for the quit signal
+		ticker := time.After(pollInterval)
+		select {
+		case <-quit:
+			return nil
+		case <-ticker:
+		}
 	}
 
 	var monitor sync.WaitGroup

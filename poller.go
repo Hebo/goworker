@@ -53,40 +53,16 @@ func (p *poller) getJob(conn redis.Conn) (*job, error) {
 	return nil, nil
 }
 
-// initialize() runs in an endless loop until an initial connection is
-// established or a quit signal is received. This will effectively block
-// the running routine until a connection is available or a quit signal is
-// received.
-func (p *poller) initialize(interval time.Duration, quit <-chan bool) bool {
-	for {
-		conn, err := GetConn()
-		if err != nil {
-			logger.Criticalf("Error on getting connection to initialize poller %s", p)
-
-			// Sleep for a bit or wait for the quit signal
-			ticker := time.After(interval)
-			select {
-			case <-quit:
-				return false
-			case <-ticker:
-				continue // try again
-			}
-		}
-
-		p.open(conn)
-		p.start(conn)
-		PutConn(conn)
-
-		return true
+func (p *poller) beginPolling(interval time.Duration, quit <-chan bool) (<-chan *job, error) {
+	conn, err := GetConn()
+	if err != nil {
+		logger.Criticalf("Error on getting connection to initialize poller %s", p)
+		return nil, err
 	}
-}
 
-func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
-	if ok := p.initialize(interval, quit); !ok {
-		// The only way for this to happen is a quit signal being received,
-		// which means we're shutting down anyway...
-		return nil
-	}
+	p.open(conn)
+	p.start(conn)
+	PutConn(conn)
 
 	jobs := make(chan *job)
 
@@ -171,5 +147,5 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 		}
 	}()
 
-	return jobs
+	return jobs, nil
 }
