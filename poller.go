@@ -94,7 +94,7 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 
 			conn, err := GetConn()
 			if err != nil {
-				logger.Criticalf("Error on getting connection in poller %s", p)
+				logger.Criticalf("Error on getting connection for cleanup in poller %s", p)
 				return
 			}
 
@@ -111,13 +111,20 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 				conn, err := GetConn()
 				if err != nil {
 					logger.Criticalf("Error on getting connection in poller %s", p)
-					return
+					ticker := time.After(interval)
+					select {
+					case <-quit:
+						return
+					case <-ticker:
+						continue
+					}
 				}
 
 				job, err := p.getJob(conn)
 				if err != nil {
 					logger.Errorf("Error on %v getting job from %v: %v", p, p.Queues, err)
-					return
+					PutConn(conn)
+					continue
 				}
 
 				if job != nil {
@@ -135,7 +142,7 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 
 						conn, err := GetConn()
 						if err != nil {
-							logger.Criticalf("Error on getting connection in poller %s", p)
+							logger.Criticalf("Error on getting connection for requeue in poller %s", p)
 							return
 						}
 
