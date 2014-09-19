@@ -1,12 +1,13 @@
 package goworker
 
 import (
-	"code.google.com/p/vitess/go/pools"
-	"github.com/cihub/seelog"
 	"os"
 	"strconv"
 	"sync"
 	"time"
+
+	"code.google.com/p/vitess/go/pools"
+	"github.com/cihub/seelog"
 )
 
 var (
@@ -84,7 +85,7 @@ func Work() error {
 	}
 	defer Close()
 
-	quit := signals()
+	quit := Signals()
 
 	poller, err := newPoller(queues, isStrict)
 	if err != nil {

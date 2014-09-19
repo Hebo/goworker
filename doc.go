@@ -42,7 +42,9 @@
 //	}
 //
 // To create workers that share a database pool or other
-// resources, use a closure to share variables.
+// resources, use a closure to share variables. Clean up
+// shared resources using the channel provided by the
+// Signals function.
 //
 //	package main
 //
@@ -53,6 +55,13 @@
 //
 //	func newMyFunc(uri string) (func(queue string, args ...interface{}) error) {
 //		foo := NewFoo(uri)
+//
+//		quit := goworker.Signals()
+//		go func() {
+//			<-quit
+//			foo.CleanUp()
+//		}()
+//
 //		return func(queue string, args ...interface{}) error {
 //			foo.Bar(args)
 //			return nil
