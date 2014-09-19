@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/garyburd/redigo/redis"
 )
 
 type worker struct {
@@ -26,7 +28,7 @@ func (w *worker) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w.String())
 }
 
-func (w *worker) start(conn *RedisConn, job *job) error {
+func (w *worker) start(conn redis.Conn, job *job) error {
 	work := &work{
 		Queue:   job.Queue,
 		RunAt:   time.Now(),
@@ -44,7 +46,7 @@ func (w *worker) start(conn *RedisConn, job *job) error {
 	return w.process.start(conn)
 }
 
-func (w *worker) fail(conn *RedisConn, job *job, err error) error {
+func (w *worker) fail(conn redis.Conn, job *job, err error) error {
 	failure := &failure{
 		FailedAt:  time.Now(),
 		Payload:   job.Payload,
@@ -62,14 +64,14 @@ func (w *worker) fail(conn *RedisConn, job *job, err error) error {
 	return w.process.fail(conn)
 }
 
-func (w *worker) succeed(conn *RedisConn, job *job) error {
+func (w *worker) succeed(conn redis.Conn, job *job) error {
 	conn.Send("INCR", fmt.Sprintf("%sstat:processed", namespace))
 	conn.Send("INCR", fmt.Sprintf("%sstat:processed:%s", namespace, w))
 
 	return nil
 }
 
-func (w *worker) finish(conn *RedisConn, job *job, err error) error {
+func (w *worker) finish(conn redis.Conn, job *job, err error) error {
 	if err != nil {
 		w.fail(conn, job, err)
 	} else {
@@ -142,9 +144,11 @@ func (w *worker) run(job *job, workerFunc workerFunc) {
 	conn, err := GetConn()
 	if err != nil {
 		logger.Criticalf("Error on getting connection in worker %v", w)
-	} else {
-		w.start(conn, job)
-		PutConn(conn)
+		return
 	}
+
+	w.start(conn, job)
+	PutConn(conn)
+
 	err = workerFunc(job.Queue, job.Payload.Args...)
 }

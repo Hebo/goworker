@@ -6,13 +6,15 @@ import (
 	"sync"
 	"time"
 
-	"code.google.com/p/vitess/go/pools"
 	"github.com/cihub/seelog"
+	"github.com/garyburd/redigo/redis"
 )
+
+const redisConnectionBuffer = 5
 
 var (
 	logger seelog.LoggerInterface
-	pool   *pools.ResourcePool
+	pool   *redis.Pool
 )
 
 // Init initializes the goworker process. This will be
@@ -30,7 +32,7 @@ func Init() error {
 		return err
 	}
 
-	pool = newRedisPool(uri, connections, connections, time.Minute)
+	pool = newRedisPool(uri, connections, connections+redisConnectionBuffer, time.Minute)
 
 	return nil
 }
@@ -41,21 +43,27 @@ func Init() error {
 // connection will cause concurrent worker functions to lock
 // while they wait for an available connection. Expect this
 // API to change drastically.
-func GetConn() (*RedisConn, error) {
-	resource, err := pool.Get()
+func GetConn() (redis.Conn, error) {
+	r := pool.Get()
 
-	if err != nil {
+	// Force acquisition of an underlying connection:
+	// https://github.com/garyburd/redigo/blob/master/redis/pool.go#L138
+	if err := r.Err(); err != nil {
+		r.Close()
 		return nil, err
 	}
-	return resource.(*RedisConn), nil
+
+	return r, nil
 }
 
 // PutConn puts a connection back into the connection pool.
 // Run this as soon as you finish using a connection that
 // you got from GetConn. Expect this API to change
 // drastically.
-func PutConn(conn *RedisConn) {
-	pool.Put(conn)
+func PutConn(conn redis.Conn) {
+	if conn != nil {
+		conn.Close()
+	}
 }
 
 // Close cleans up resources initialized by goworker. This
@@ -70,7 +78,9 @@ func PutConn(conn *RedisConn) {
 //	}
 //	defer goworker.Close()
 func Close() {
-	pool.Close()
+	if pool != nil {
+		pool.Close()
+	}
 }
 
 // Work starts the goworker process. Check for errors in
@@ -91,7 +101,25 @@ func Work() error {
 	if err != nil {
 		return err
 	}
-	jobs := poller.poll(time.Duration(interval), quit)
+
+	pollInterval := time.Duration(interval)
+	var jobs <-chan *job
+	for {
+		var err error
+		jobs, err = poller.beginPolling(pollInterval, quit)
+		if err == nil {
+			logger.Infof("Poller initialized %s", poller)
+			break
+		}
+
+		// Sleep for a bit or wait for the quit signal
+		ticker := time.After(pollInterval)
+		select {
+		case <-quit:
+			return nil
+		case <-ticker:
+		}
+	}
 
 	var monitor sync.WaitGroup
 

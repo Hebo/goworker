@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/garyburd/redigo/redis"
 )
 
 type poller struct {
@@ -23,7 +25,7 @@ func newPoller(queues []string, isStrict bool) (*poller, error) {
 	}, nil
 }
 
-func (p *poller) getJob(conn *RedisConn) (*job, error) {
+func (p *poller) getJob(conn redis.Conn) (*job, error) {
 	for _, queue := range p.queues(p.isStrict) {
 		logger.Debugf("Checking %s", queue)
 
@@ -51,17 +53,18 @@ func (p *poller) getJob(conn *RedisConn) (*job, error) {
 	return nil, nil
 }
 
-func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
-	jobs := make(chan *job)
-
+func (p *poller) beginPolling(interval time.Duration, quit <-chan bool) (<-chan *job, error) {
 	conn, err := GetConn()
 	if err != nil {
-		logger.Criticalf("Error on getting connection in poller %s", p)
-	} else {
-		p.open(conn)
-		p.start(conn)
-		PutConn(conn)
+		logger.Criticalf("Error on getting connection to initialize poller %s", p)
+		return nil, err
 	}
+
+	p.open(conn)
+	p.start(conn)
+	PutConn(conn)
+
+	jobs := make(chan *job)
 
 	go func() {
 		defer func() {
@@ -69,12 +72,13 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 
 			conn, err := GetConn()
 			if err != nil {
-				logger.Criticalf("Error on getting connection in poller %s", p)
-			} else {
-				p.finish(conn)
-				p.close(conn)
-				PutConn(conn)
+				logger.Criticalf("Error on getting connection for cleanup in poller %s", p)
+				return
 			}
+
+			p.finish(conn)
+			p.close(conn)
+			PutConn(conn)
 		}()
 
 		for {
@@ -85,12 +89,22 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 				conn, err := GetConn()
 				if err != nil {
 					logger.Criticalf("Error on getting connection in poller %s", p)
+					ticker := time.After(interval)
+					select {
+					case <-quit:
+						return
+					case <-ticker:
+						continue
+					}
 				}
 
 				job, err := p.getJob(conn)
 				if err != nil {
 					logger.Errorf("Error on %v getting job from %v: %v", p, p.Queues, err)
+					PutConn(conn)
+					continue
 				}
+
 				if job != nil {
 					conn.Send("INCR", fmt.Sprintf("%sstat:processed:%v", namespace, p))
 					conn.Flush()
@@ -103,9 +117,11 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 							logger.Criticalf("Error requeueing %v: %v", job, err)
 							return
 						}
+
 						conn, err := GetConn()
 						if err != nil {
-							logger.Criticalf("Error on getting connection in poller %s", p)
+							logger.Criticalf("Error on getting connection for requeue in poller %s", p)
+							return
 						}
 
 						conn.Send("LPUSH", fmt.Sprintf("%squeue:%s", namespace, job.Queue), buf)
@@ -131,5 +147,5 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *job {
 		}
 	}()
 
-	return jobs
+	return jobs, nil
 }
